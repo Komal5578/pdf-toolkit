@@ -1,11 +1,11 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import * as pdfjsLib from 'pdfjs-dist';
+import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf';
 import JSZip from 'jszip';
 import DropZone from '../components/DropZone';
 
-// Use local worker copied from node_modules/pdfjs-dist/build/pdf.worker.min.js
-// into /public — guarantees the API and worker versions always match exactly.
+// Local worker from node_modules/pdfjs-dist/legacy/build/pdf.worker.min.js
+// copied into /public — API and worker are always from the same package install.
 pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.js';
 
 const GRADIENT = 'linear-gradient(135deg, #7c3aed, #8b5cf6)';
