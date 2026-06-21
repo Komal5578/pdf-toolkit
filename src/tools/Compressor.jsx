@@ -1,12 +1,36 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { PDFDocument } from 'pdf-lib';
-import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf';
 import DropZone from '../components/DropZone';
 
-// Local worker from node_modules/pdfjs-dist/legacy/build/pdf.worker.min.js
-// copied into /public — API and worker are always from the same package install.
-pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.js';
+// ─── pdfjs loaded dynamically from CDN at runtime ────────────────────────────
+// This completely bypasses Vite's bundler/optimizer — no version mismatches,
+// no 504 Outdated Optimize Dep errors, no worker path problems.
+const PDFJS_VERSION = '3.11.174';
+const PDFJS_SCRIPT  = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${PDFJS_VERSION}/pdf.min.js`;
+const PDFJS_WORKER  = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${PDFJS_VERSION}/pdf.worker.min.js`;
+
+let _pdfjsCache = null;
+function loadPdfJs() {
+  if (_pdfjsCache) return Promise.resolve(_pdfjsCache);
+  if (window.pdfjsLib) {
+    window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER;
+    _pdfjsCache = window.pdfjsLib;
+    return Promise.resolve(_pdfjsCache);
+  }
+  return new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = PDFJS_SCRIPT;
+    script.onload = () => {
+      window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER;
+      _pdfjsCache = window.pdfjsLib;
+      resolve(_pdfjsCache);
+    };
+    script.onerror = () => reject(new Error(`Failed to load PDF.js ${PDFJS_VERSION} from CDN`));
+    document.head.appendChild(script);
+  });
+}
+// ─────────────────────────────────────────────────────────────────────────────
 
 const GRADIENT = 'linear-gradient(135deg, #f59e0b, #ef4444)';
 const SHADOW   = '0 0 20px rgba(245, 158, 11, 0.3)';
@@ -18,67 +42,52 @@ function formatBytes(b) {
   return (b / Math.pow(k, i)).toFixed(1) + ' ' + s[i];
 }
 
-// Quality presets: { jpegQuality (0-1), renderScale }
 const PRESETS = {
   maximum: { jpegQuality: 0.50, renderScale: 1.2, label: 'Maximum — smallest file' },
   balanced: { jpegQuality: 0.65, renderScale: 1.5, label: 'Balanced — recommended' },
   minimal:  { jpegQuality: 0.82, renderScale: 2.0, label: 'Minimal — best quality'  },
 };
 
-/**
- * Core compression:
- *  1. Load PDF with pdfjs-dist
- *  2. Render every page to a canvas at `renderScale`
- *  3. Export canvas as JPEG at `jpegQuality`
- *  4. Build a brand-new PDF with pdf-lib, embedding the JPEG for each page
- *     (page dimensions are set to match original pts so layout is preserved)
- */
 async function compressPdfWithImageResampling(arrayBuffer, preset, onProgress) {
+  const pdfjsLib = await loadPdfJs();
   const { jpegQuality, renderScale } = preset;
 
-  // Step 1 — parse with pdfjs
   const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
   const pdfJs = await loadingTask.promise;
   const numPages = pdfJs.numPages;
-  onProgress(10);
+  onProgress(10, 'Loaded PDF…');
 
-  // Step 2 — create output PDF
   const outDoc = await PDFDocument.create();
 
   for (let pageNum = 1; pageNum <= numPages; pageNum++) {
-    // Render page to canvas
-    const page      = await pdfJs.getPage(pageNum);
-    const viewport  = page.getViewport({ scale: renderScale });
+    const page     = await pdfJs.getPage(pageNum);
+    const viewport = page.getViewport({ scale: renderScale });
 
-    const canvas    = document.createElement('canvas');
-    canvas.width    = Math.round(viewport.width);
-    canvas.height   = Math.round(viewport.height);
-    const ctx       = canvas.getContext('2d');
+    const canvas   = document.createElement('canvas');
+    canvas.width   = Math.round(viewport.width);
+    canvas.height  = Math.round(viewport.height);
+    const ctx      = canvas.getContext('2d');
 
     await page.render({ canvasContext: ctx, viewport }).promise;
 
-    // Export as JPEG at chosen quality
-    const dataUrl = canvas.toDataURL('image/jpeg', jpegQuality);
-    const base64  = dataUrl.split(',')[1];
+    // Re-encode pixels as JPEG at chosen quality
+    const dataUrl   = canvas.toDataURL('image/jpeg', jpegQuality);
+    const base64    = dataUrl.split(',')[1];
     const jpegBytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
 
-    // Get original page size in points (1 pt = 1/72 inch)
+    // Preserve original page dimensions (points)
     const origVP  = page.getViewport({ scale: 1 });
-    const widthPt  = origVP.width;
-    const heightPt = origVP.height;
-
-    // Embed JPEG and add page at original dimensions
-    const jpgImage  = await outDoc.embedJpg(jpegBytes);
-    const outPage   = outDoc.addPage([widthPt, heightPt]);
-    outPage.drawImage(jpgImage, { x: 0, y: 0, width: widthPt, height: heightPt });
+    const jpgImg  = await outDoc.embedJpg(jpegBytes);
+    const outPage = outDoc.addPage([origVP.width, origVP.height]);
+    outPage.drawImage(jpgImg, { x: 0, y: 0, width: origVP.width, height: origVP.height });
 
     const pct = 10 + Math.round((pageNum / numPages) * 82);
-    onProgress(pct);
+    onProgress(pct, `Compressing page ${pageNum} of ${numPages}…`);
   }
 
-  onProgress(95);
+  onProgress(95, 'Finalising PDF…');
   const outBytes = await outDoc.save({ useObjectStreams: true });
-  onProgress(100);
+  onProgress(100, 'Done');
   return outBytes;
 }
 
@@ -97,32 +106,21 @@ export default function Compressor() {
     setProgress(0);
     setError('');
     setResult(null);
-    setStatusMsg('Reading file…');
+    setStatusMsg('Loading PDF.js…');
 
     try {
       const file        = files[0];
       const arrayBuffer = await file.arrayBuffer();
 
-      setStatusMsg('Rendering pages and compressing images…');
-
       const outBytes = await compressPdfWithImageResampling(
         arrayBuffer,
         PRESETS[preset],
-        (pct) => {
-          setProgress(pct);
-          if (pct < 95) {
-            const approxPage = Math.ceil((pct - 10) / 82 * (/* pages guess */ 1));
-            setStatusMsg(`Compressing page… ${pct}%`);
-          } else {
-            setStatusMsg('Finalising PDF…');
-          }
-        }
+        (pct, msg) => { setProgress(pct); setStatusMsg(msg); }
       );
 
       const originalSize   = file.size;
       const compressedSize = outBytes.length;
-      const savedBytes     = originalSize - compressedSize;
-      const reduction      = ((savedBytes / originalSize) * 100).toFixed(1);
+      const reduction      = (((originalSize - compressedSize) / originalSize) * 100).toFixed(1);
 
       const blob    = new Blob([outBytes], { type: 'application/pdf' });
       const url     = URL.createObjectURL(blob);
@@ -172,8 +170,6 @@ export default function Compressor() {
               ))}
             </select>
           </div>
-
-          {/* Show estimated quality info */}
           <div style={{ marginTop: 10, padding: '10px 0 2px', fontSize: 12, color: 'var(--text-muted)', borderTop: '1px solid var(--border)' }}>
             {preset === 'maximum' && '⚡ JPEG 50% quality — best size reduction, slight quality loss on text-heavy PDFs'}
             {preset === 'balanced' && '⚖️ JPEG 65% quality — great compression, visually near-identical output'}
@@ -187,7 +183,7 @@ export default function Compressor() {
           <div className="progress-bar-wrap">
             <div className="progress-bar-fill" style={{ width: `${progress}%` }} />
           </div>
-          <div className="progress-text">{statusMsg || `Compressing… ${progress}%`}</div>
+          <div className="progress-text">{statusMsg || `${progress}%`}</div>
         </div>
       )}
 
