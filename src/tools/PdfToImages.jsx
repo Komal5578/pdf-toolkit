@@ -4,10 +4,9 @@ import * as pdfjsLib from 'pdfjs-dist';
 import JSZip from 'jszip';
 import DropZone from '../components/DropZone';
 
-// Hardcoded to match installed pdfjs-dist@3.11.174 — never use pdfjsLib.version
-// as it will resolve to whatever version is installed and may break the CDN URL.
-pdfjsLib.GlobalWorkerOptions.workerSrc =
-  'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+// Use local worker copied from node_modules/pdfjs-dist/build/pdf.worker.min.js
+// into /public — guarantees the API and worker versions always match exactly.
+pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.js';
 
 const GRADIENT = 'linear-gradient(135deg, #7c3aed, #8b5cf6)';
 const SHADOW = '0 0 20px rgba(124, 58, 237, 0.3)';
