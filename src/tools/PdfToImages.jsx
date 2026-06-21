@@ -4,8 +4,10 @@ import * as pdfjsLib from 'pdfjs-dist';
 import JSZip from 'jszip';
 import DropZone from '../components/DropZone';
 
-// Set worker from CDN to avoid bundling issues
-pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
+// Hardcoded to match installed pdfjs-dist@3.11.174 — never use pdfjsLib.version
+// as it will resolve to whatever version is installed and may break the CDN URL.
+pdfjsLib.GlobalWorkerOptions.workerSrc =
+  'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 
 const GRADIENT = 'linear-gradient(135deg, #7c3aed, #8b5cf6)';
 const SHADOW = '0 0 20px rgba(124, 58, 237, 0.3)';
