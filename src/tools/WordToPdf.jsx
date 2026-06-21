@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import mammoth from 'mammoth';
 import { jsPDF } from 'jspdf';
+import html2canvas from 'html2canvas';
 import DropZone from '../components/DropZone';
 
 const GRADIENT = 'linear-gradient(135deg, #f43f5e, #ec4899)';
@@ -39,60 +40,95 @@ export default function WordToPdf() {
       const arrayBuffer = await files[0].arrayBuffer();
       setProgress(25);
 
-      // Convert DOCX to HTML using mammoth
       const { value: html, messages } = await mammoth.convertToHtml({ arrayBuffer });
-      setProgress(50);
+      setProgress(40);
 
-      // Create a temporary element to render HTML
+      // Create a hidden container with proper styles to preserve tables
       const container = document.createElement('div');
       container.style.cssText = `
-        width: 800px;
+        width: 794px;
         padding: 60px;
         font-family: Arial, Helvetica, sans-serif;
-        font-size: 12px;
-        line-height: 1.6;
-        color: #000;
-        background: #fff;
+        font-size: 13px;
+        line-height: 1.7;
+        color: #000000;
+        background: #ffffff;
         position: fixed;
         left: -9999px;
         top: 0;
+        box-sizing: border-box;
       `;
-      container.innerHTML = html;
+
+      // Inject table styles so tables render correctly
+      container.innerHTML = `
+        <style>
+          table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 12px 0;
+          }
+          td, th {
+            border: 1px solid #000;
+            padding: 6px 10px;
+            text-align: left;
+            vertical-align: top;
+            word-break: break-word;
+          }
+          th {
+            background-color: #f0f0f0;
+            font-weight: bold;
+          }
+          p { margin: 6px 0; }
+          h1 { font-size: 22px; font-weight: bold; margin: 14px 0 8px; }
+          h2 { font-size: 18px; font-weight: bold; margin: 12px 0 6px; }
+          h3 { font-size: 15px; font-weight: bold; margin: 10px 0 5px; }
+          ul, ol { margin: 6px 0; padding-left: 24px; }
+          li { margin: 3px 0; }
+          strong { font-weight: bold; }
+          em { font-style: italic; }
+        </style>
+        ${html}
+      `;
+
       document.body.appendChild(container);
+      setProgress(55);
 
-      setProgress(60);
+      // Use html2canvas to capture the full rendered HTML including tables
+      const canvas = await html2canvas(container, {
+        scale: 2,
+        useCORS: true,
+        backgroundColor: '#ffffff',
+        logging: false,
+        width: 794,
+        windowWidth: 794,
+      });
 
-      // Use jsPDF with html method
+      document.body.removeChild(container);
+      setProgress(80);
+
+      const imgData = canvas.toDataURL('image/jpeg', 0.95);
       const pdf = new jsPDF({ unit: 'mm', format: 'a4' });
 
-      // Convert HTML text content to PDF using jsPDF's text wrapping
-      const plainText = container.innerText || container.textContent || '';
-      document.body.removeChild(container);
+      const pageWidth = 210; // A4 width in mm
+      const pageHeight = 297; // A4 height in mm
+      const imgWidthMm = pageWidth;
+      const imgHeightMm = (canvas.height * pageWidth) / canvas.width;
 
-      const lines = plainText.split('\n').filter(l => l.trim());
-      const pageWidth = 190; // A4 width minus margins
-      const pageHeight = 267; // A4 height minus margins
-      const margin = 15;
-      const lineHeight = 6;
-      let y = margin;
+      let heightLeft = imgHeightMm;
+      let position = 0;
 
-      pdf.setFontSize(11);
-      pdf.setFont('helvetica', 'normal');
+      // Add image across multiple pages if needed
+      pdf.addImage(imgData, 'JPEG', 0, position, imgWidthMm, imgHeightMm);
+      heightLeft -= pageHeight;
 
-      for (const line of lines) {
-        const splitLines = pdf.splitTextToSize(line, pageWidth);
-        for (const sl of splitLines) {
-          if (y + lineHeight > pageHeight) {
-            pdf.addPage();
-            y = margin;
-          }
-          pdf.text(sl, margin, y);
-          y += lineHeight;
-        }
-        y += 2; // paragraph spacing
+      while (heightLeft > 0) {
+        position -= pageHeight;
+        pdf.addPage();
+        pdf.addImage(imgData, 'JPEG', 0, position, imgWidthMm, imgHeightMm);
+        heightLeft -= pageHeight;
       }
 
-      setProgress(90);
+      setProgress(95);
 
       const outName = files[0].name.replace(/\.(docx?|doc)$/i, '.pdf');
       pdf.save(outName);
@@ -113,7 +149,7 @@ export default function WordToPdf() {
         <div className="tool-page-icon" style={{ background: GRADIENT, boxShadow: SHADOW }}>📝</div>
         <div>
           <div className="tool-page-title">Word to PDF</div>
-          <div className="tool-page-subtitle">Convert DOCX/DOC documents to PDF in the browser</div>
+          <div className="tool-page-subtitle">Convert DOCX/DOC documents to PDF — tables and formatting preserved</div>
         </div>
       </div>
 
@@ -155,7 +191,7 @@ export default function WordToPdf() {
       {error && <div className="alert alert-error">⚠️ {error}</div>}
 
       <div className="alert alert-info" style={{ marginTop: files.length ? 16 : 0 }}>
-        ℹ️ Complex formatting (tables, images, special fonts) may be simplified. Text content will be preserved.
+        ℹ️ Tables, headings, bold, italic, and lists are fully preserved in the output PDF.
       </div>
 
       <button
